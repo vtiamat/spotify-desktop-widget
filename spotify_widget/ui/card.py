@@ -1,7 +1,7 @@
 """Main MusicCardWidget integrating artwork, track info, progress, and controls."""
 
-from typing import Optional
-from PySide6.QtCore import Qt, QPoint, QRectF, QEvent, QObject
+from typing import Optional, Any
+from PySide6.QtCore import Qt, QPoint, QRectF, QEvent, QObject, Signal
 from PySide6.QtGui import (
     QKeyEvent,
     QMouseEvent,
@@ -92,10 +92,16 @@ class GlassCardContainer(QWidget):
 class MusicCardWidget(QWidget):
     """Frameless, translucent glass desktop music card widget for Spotify."""
 
+    play_pause_requested = Signal()
+    previous_requested = Signal()
+    next_requested = Signal()
+    seek_requested = Signal(int)
+
     def __init__(self, state: Optional[PlaybackState] = None, parent=None):
         super().__init__(parent)
         self._state = state or get_placeholder_state()
         self._drag_pos = QPoint()
+        self._mpris_client: Optional[Any] = None
 
         # Window configuration for frameless presentation on desktop
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
@@ -166,12 +172,12 @@ class MusicCardWidget(QWidget):
 
         # 3. Progress Section (Progress Bar + Timestamps)
         self.progress_section = ProgressSection(self.card_container)
-        self.progress_section.seek_requested.connect(self._on_seek_requested)
+        self.progress_section.seek_requested.connect(self._on_seek_committed)
         container_layout.addWidget(self.progress_section)
 
         # 4. Controls Section (Prev, Play/Pause, Next)
         self.controls = PlaybackControls(self.card_container)
-        self.controls.play_pause_clicked.connect(self._on_play_pause_toggled)
+        self.controls.play_pause_clicked.connect(self._on_play_pause_clicked)
         self.controls.previous_clicked.connect(self._on_previous_clicked)
         self.controls.next_clicked.connect(self._on_next_clicked)
         container_layout.addWidget(self.controls)
@@ -179,12 +185,22 @@ class MusicCardWidget(QWidget):
         # Render initial state
         self._apply_state(self._state)
 
-        # Default placeholder artwork if none provided
-        if not self._state.art_data:
+        # Default placeholder artwork if none provided and online
+        if not self._state.art_data and self._state.is_online:
             self.artwork.set_artwork(create_fictional_cover_pixmap(ARTWORK_SIZE))
 
         # Setup drag filters across card areas and artwork
         self._setup_drag_filters()
+
+    def connect_mpris_client(self, client: Any):
+        """Connect an MPRIS client to drive state updates and receive playback commands."""
+        self._mpris_client = client
+        self.play_pause_requested.connect(client.play_pause)
+        self.previous_requested.connect(client.previous)
+        self.next_requested.connect(client.next)
+        self.seek_requested.connect(client.seek)
+        client.state_changed.connect(self.update_state)
+        self.update_state(client.current_state())
 
     def update_state(self, state: PlaybackState):
         """Update widget with new playback state."""
@@ -199,51 +215,72 @@ class MusicCardWidget(QWidget):
         self.artist_label.setText(state.artist)
         self.album_label.setText(state.album)
 
+        can_seek = state.can_seek and state.is_online and (state.duration_seconds > 0)
+        self.progress_section.set_seeking_enabled(can_seek)
         self.progress_section.update_progress(
             position_text=state.formatted_position,
             duration_text=state.formatted_duration,
             fraction=state.progress_fraction,
+            duration_seconds=state.duration_seconds,
         )
 
+        can_play_pause = state.can_pause if state.is_playing else state.can_play
         self.controls.set_playing(state.is_playing)
-        self.controls.set_capabilities(state.can_go_previous, state.can_go_next)
+        self.controls.set_capabilities(state.can_go_previous, state.can_go_next, can_play_pause)
 
         if state.art_data:
             self.artwork.set_artwork_from_data(state.art_data)
+        elif not state.is_online:
+            # Clear artwork when offline to display vinyl fallback
+            self.artwork.set_artwork(None)
+        elif self.artwork._pixmap is None:
+            self.artwork.set_artwork(create_fictional_cover_pixmap(ARTWORK_SIZE))
 
-    # Prototype interactive handlers
-    def _on_play_pause_toggled(self):
-        self._state.is_playing = not self._state.is_playing
-        self.controls.set_playing(self._state.is_playing)
+    # Control action handlers
+    def _on_play_pause_clicked(self):
+        self.play_pause_requested.emit()
+        if self._mpris_client is None:
+            # Fallback for standalone prototype mode
+            self._state.is_playing = not self._state.is_playing
+            self.controls.set_playing(self._state.is_playing)
 
-    def _on_seek_requested(self, fraction: float):
+    def _on_seek_committed(self, fraction: float):
         if self._state.duration_seconds > 0:
-            self._state.position_seconds = int(fraction * self._state.duration_seconds)
-            self.progress_section.update_progress(
-                self._state.formatted_position,
-                self._state.formatted_duration,
-                self._state.progress_fraction,
-            )
+            target_sec = int(fraction * self._state.duration_seconds)
+            self.seek_requested.emit(target_sec)
+            if self._mpris_client is None:
+                # Fallback for standalone prototype mode
+                self._state.position_seconds = target_sec
+                self.progress_section.update_progress(
+                    self._state.formatted_position,
+                    self._state.formatted_duration,
+                    self._state.progress_fraction,
+                    self._state.duration_seconds,
+                )
 
     def _on_previous_clicked(self):
-        self._state.position_seconds = 0
-        self.progress_section.update_progress(
-            self._state.formatted_position,
-            self._state.formatted_duration,
-            0.0,
-        )
-
-    def _on_next_clicked(self):
-        if self._state.duration_seconds > 0:
-            self._state.position_seconds = min(
-                self._state.duration_seconds,
-                self._state.position_seconds + 30,
-            )
+        self.previous_requested.emit()
+        if self._mpris_client is None:
+            self._state.position_seconds = 0
             self.progress_section.update_progress(
                 self._state.formatted_position,
                 self._state.formatted_duration,
-                self._state.progress_fraction,
+                0.0,
             )
+
+    def _on_next_clicked(self):
+        self.next_requested.emit()
+        if self._mpris_client is None:
+            if self._state.duration_seconds > 0:
+                self._state.position_seconds = min(
+                    self._state.duration_seconds,
+                    self._state.position_seconds + 30,
+                )
+                self.progress_section.update_progress(
+                    self._state.formatted_position,
+                    self._state.formatted_duration,
+                    self._state.progress_fraction,
+                )
 
     # --- Mouse Dragging Implementation ---
     def _is_interactive_widget(self, obj: Optional[QObject]) -> bool:

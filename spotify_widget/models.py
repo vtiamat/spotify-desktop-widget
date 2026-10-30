@@ -29,6 +29,11 @@ class PlaybackState:
     can_go_previous: bool = True
     can_go_next: bool = True
     can_seek: bool = True
+    can_play: bool = True
+    can_pause: bool = True
+    is_online: bool = True
+    art_url: Optional[str] = None
+    track_id: Optional[str] = None
     art_data: Optional[bytes] = None
 
     @property
@@ -62,6 +67,30 @@ def get_placeholder_state() -> PlaybackState:
         can_go_previous=True,
         can_go_next=True,
         can_seek=True,
+        can_play=True,
+        can_pause=True,
+        is_online=True,
+        art_data=None,
+    )
+
+
+def get_offline_state() -> PlaybackState:
+    """Return state representing Spotify when offline or disconnected."""
+    return PlaybackState(
+        title="Spotify is not running",
+        artist="Waiting for Spotify...",
+        album="",
+        duration_seconds=0,
+        position_seconds=0,
+        is_playing=False,
+        can_go_previous=False,
+        can_go_next=False,
+        can_seek=False,
+        can_play=False,
+        can_pause=False,
+        is_online=False,
+        art_url=None,
+        track_id=None,
         art_data=None,
     )
 
@@ -78,5 +107,8 @@ def get_long_text_placeholder_state() -> PlaybackState:
         can_go_previous=True,
         can_go_next=True,
         can_seek=True,
+        can_play=True,
+        can_pause=True,
+        is_online=True,
         art_data=None,
     )

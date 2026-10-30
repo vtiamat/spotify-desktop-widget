@@ -97,32 +97,35 @@ QLabel#TimeLabel {{
 QPushButton#SecondaryControl {{
     background: transparent;
     border: none;
-    color: {COLOR_BUTTON_FG};
-    font-size: 18px;
-    border-radius: 18px;
+    color: transparent;
+    border-radius: 19px;
+    padding: 0px;
+    margin: 0px;
+    text-align: center;
 }}
 
 QPushButton#SecondaryControl:hover {{
-    color: {COLOR_BUTTON_HOVER};
+    color: transparent;
     background-color: {COLOR_BUTTON_BG_HOVER};
 }}
 
 QPushButton#SecondaryControl:pressed {{
-    color: {COLOR_TEXT_MUTED};
+    color: transparent;
     background-color: rgba(255, 255, 255, 0.04);
 }}
 
 QPushButton#SecondaryControl:disabled {{
-    color: {COLOR_BUTTON_DISABLED};
+    color: transparent;
 }}
 
 QPushButton#PlayPauseControl {{
     background-color: {COLOR_SPOTIFY_GREEN};
     border: none;
-    color: #121212;
-    font-size: 16px;
-    font-weight: bold;
-    border-radius: 20px;
+    color: transparent;
+    border-radius: 19px;
+    padding: 0px;
+    margin: 0px;
+    text-align: center;
 }}
 
 QPushButton#PlayPauseControl:hover {{
@@ -131,5 +134,10 @@ QPushButton#PlayPauseControl:hover {{
 
 QPushButton#PlayPauseControl:pressed {{
     background-color: {COLOR_SPOTIFY_GREEN_PRESSED};
+}}
+
+QPushButton#PlayPauseControl:disabled {{
+    background-color: rgba(29, 185, 84, 0.20);
+    color: transparent;
 }}
 """

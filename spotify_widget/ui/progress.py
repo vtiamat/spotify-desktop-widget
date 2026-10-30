@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QPainter, QPainterPath, QColor, QBrush, QPen
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel
 
+from spotify_widget.models import format_seconds
 from spotify_widget.ui.style import (
     PROGRESS_BG_COLOR,
     COLOR_PROGRESS_FILL,
@@ -12,19 +13,39 @@ from spotify_widget.ui.style import (
 
 
 class ClickableProgressBar(QWidget):
-    """Custom compact progress bar supporting clicks and drag-seeking."""
+    """Custom compact progress bar supporting scrubbing and seek-on-release."""
 
-    seek_requested = Signal(float)  # Emits fraction 0.0 - 1.0
+    seek_requested = Signal(float)  # Emitted when seek is committed on mouse release (0.0 - 1.0)
+    scrubbing = Signal(float)       # Emitted while dragging for live timestamp preview (0.0 - 1.0)
 
     def __init__(self, height: int = 5, parent=None):
         super().__init__(parent)
         self._fraction: float = 0.0
         self._bar_height = height
         self._is_dragging = False
+        self._seeking_enabled = True
         self.setFixedHeight(14)  # Generous hit target for clicking while bar itself is slim
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def is_dragging(self) -> bool:
+        """Return True if user is currently dragging the progress slider."""
+        return self._is_dragging
+
+    def set_seeking_enabled(self, enabled: bool):
+        """Enable or disable seeking interaction and cursor."""
+        self._seeking_enabled = enabled
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor
+        )
+
     def set_fraction(self, fraction: float):
+        """Update fraction from playback progress if not actively dragged."""
+        if not self._is_dragging:
+            self._fraction = max(0.0, min(1.0, fraction))
+            self.update()
+
+    def set_drag_fraction(self, fraction: float):
+        """Update fraction during active dragging."""
         self._fraction = max(0.0, min(1.0, fraction))
         self.update()
 
@@ -36,21 +57,24 @@ class ClickableProgressBar(QWidget):
         return max(0.0, min(1.0, x / w))
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._seeking_enabled:
             self._is_dragging = True
             fraction = self._fraction_from_pos(event.position().x())
-            self.set_fraction(fraction)
-            self.seek_requested.emit(fraction)
+            self.set_drag_fraction(fraction)
+            self.scrubbing.emit(fraction)
 
     def mouseMoveEvent(self, event):
-        if self._is_dragging:
+        if self._is_dragging and self._seeking_enabled:
             fraction = self._fraction_from_pos(event.position().x())
-            self.set_fraction(fraction)
-            self.seek_requested.emit(fraction)
+            self.set_drag_fraction(fraction)
+            self.scrubbing.emit(fraction)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and self._is_dragging:
             self._is_dragging = False
+            fraction = self._fraction_from_pos(event.position().x())
+            self.set_drag_fraction(fraction)
+            self.seek_requested.emit(fraction)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -78,16 +102,20 @@ class ClickableProgressBar(QWidget):
 class ProgressSection(QWidget):
     """Container holding progress bar and timestamp labels."""
 
-    seek_requested = Signal(float)
+    seek_requested = Signal(float)  # Emitted when seek is committed (fraction 0.0 - 1.0)
+    scrubbing = Signal(float)       # Emitted while scrubbing
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._duration_seconds = 0
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
         self.bar = ClickableProgressBar(height=5)
         self.bar.seek_requested.connect(self.seek_requested.emit)
+        self.bar.scrubbing.connect(self._on_bar_scrubbing)
 
         time_row = QHBoxLayout()
         time_row.setContentsMargins(0, 0, 0, 0)
@@ -107,7 +135,28 @@ class ProgressSection(QWidget):
         layout.addWidget(self.bar)
         layout.addLayout(time_row)
 
-    def update_progress(self, position_text: str, duration_text: str, fraction: float):
-        self.elapsed_label.setText(position_text)
+    def _on_bar_scrubbing(self, fraction: float):
+        """Update elapsed timestamp preview during mouse scrubbing."""
+        if self._duration_seconds > 0:
+            pos = int(fraction * self._duration_seconds)
+            self.elapsed_label.setText(format_seconds(pos))
+        self.scrubbing.emit(fraction)
+
+    def set_seeking_enabled(self, enabled: bool):
+        """Enable or disable seeking on the progress bar."""
+        self.bar.set_seeking_enabled(enabled)
+
+    def update_progress(
+        self,
+        position_text: str,
+        duration_text: str,
+        fraction: float,
+        duration_seconds: int = 0,
+    ):
+        """Update timestamps and progress bar position unless being scrubbed."""
+        self._duration_seconds = duration_seconds
         self.duration_label.setText(duration_text)
-        self.bar.set_fraction(fraction)
+
+        if not self.bar.is_dragging():
+            self.elapsed_label.setText(position_text)
+            self.bar.set_fraction(fraction)
